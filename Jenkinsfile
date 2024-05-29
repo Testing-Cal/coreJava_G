@@ -245,7 +245,7 @@ pipeline {
             env.REPO_NAME = metadataVars.repoName
             env.ARTIFACTORY_URL = metadataVars.artifactoryUrl
             repoProperties = parseJsonString(env.JENKINS_METADATA,'general')
-            if(metadataVars.artifactPath){
+            if( metadataVars.artifactRepository){
                 artifactPathMetadata = parseJsonString(repoProperties,'artifactRepository')
                 artifactPathVars = parseJsonArray(artifactPathMetadata)
                 env.LIBRARY_REPO = artifactPathVars.release
@@ -385,7 +385,7 @@ pipeline {
                stage('Publish Artifact') {
                       withCredentials([usernamePassword(credentialsId: "$ARTIFACTORY_CREDENTIALS", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
                      sh """
-                     docker run --rm  -v "$WORKSPACE":/opt/"$REPO_NAME" -w /opt/"$REPO_NAME" "$JFROGCLI_IMAGE_VERSION" /bin/bash -c "jf c add jfrog --password $PASSWORD --user $USERNAME --url="$ARTIFACTORY_URL" --artifactory-url="$ARTIFACTORY_URL"/artifactory --interactive=false --overwrite=true ; jf gradle-config --repo-deploy "$LIBRARY_REPO" --use-wrapper; jf gradle artifactoryPublish"  """
+                     docker run --rm  -v "$WORKSPACE":/opt/"$REPO_NAME" -w /opt/"$REPO_NAME" "$JFROGCLI_IMAGE_VERSION" /bin/bash -c "jf c add jfrog --password "$PASSWORD" --user "$USERNAME" --url="$ARTIFACTORY_URL" --artifactory-url="$ARTIFACTORY_URL"/artifactory --interactive=false --overwrite=true ; jf gradle-config --repo-deploy "$LIBRARY_REPO" --use-wrapper; jf gradle artifactoryPublish"  """
                    }
                }
             } else if ("${list[i]}" == "'BuildContainerImage'" && env.ACTION == 'DEPLOY' && "$PUBLISH_ARTIFACT" == "false") {
