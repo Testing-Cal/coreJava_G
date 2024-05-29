@@ -58,7 +58,7 @@ pipeline {
     agent { label agentLabel }
     environment {
 
-        DEFAULT_STAGE_SEQ = "'Initialization','Build','UnitTests','SonarQubeScan','BuildContainerImage','containerImageScan','PublishContainerImage'"
+        DEFAULT_STAGE_SEQ = "'Initialization','Build','UnitTests','SonarQubeScan','BuildContainerImage','containerImageScan','artifactPublish','PublishContainerImage'"
         BRANCHES = "${env.GIT_BRANCH}"
         COMMIT = "${env.GIT_COMMIT}"
         SERVICE_PORT = "${APP_PORT}"
@@ -73,6 +73,7 @@ pipeline {
         KUBECTL_IMAGE_VERSION = "bitnami/kubectl:1.24.9" //https://hub.docker.com/r/bitnami/kubectl/tags
         HELM_IMAGE_VERSION = "alpine/helm:3.8.1" //https://hub.docker.com/r/alpine/helm/tags
         OC_IMAGE_VERSION = "quay.io/openshift/origin-cli:4.9.0" //https://quay.io/repository/openshift/origin-cli?tab=tags
+        JFROGCLI_IMAGE_VERSION = "public.ecr.aws/lazsa/gradle-jf:jdk21"
 
     }
     stages {

@@ -214,6 +214,7 @@ pipeline {
     KUBECTL_IMAGE_VERSION = "bitnami/kubectl:1.24.9" //https://hub.docker.com/r/bitnami/kubectl/tags
     HELM_IMAGE_VERSION = "alpine/helm:3.8.1" //https://hub.docker.com/r/alpine/helm/tags   
     OC_IMAGE_VERSION = "quay.io/openshift/origin-cli:4.9.0" //https://quay.io/repository/openshift/origin-cli?tab=tags
+    JFROGCLI_IMAGE_VERSION = "public.ecr.aws/lazsa/gradle-jf:jdk8"
 
   }
 
@@ -239,6 +240,16 @@ pipeline {
             env.TESTINGTOOLTYPE = metadataVars.testingToolType
             env.BROWSERTYPE = metadataVars.browserType
             env.CONTAINERSCANTYPE = metadataVars.containerScanType
+
+            env.PUBLISH_ARTIFACT = metadataVars.artifactPublish
+            env.REPO_NAME = metadataVars.repoName
+            env.ARTIFACTORY_URL = metadataVars.artifactoryUrl
+            repoProperties = parseJsonString(env.JENKINS_METADATA,'general')
+            if(metadataVars.artifactPath){
+                artifactPathMetadata = parseJsonString(repoProperties,'artifactRepository')
+                artifactPathVars = parseJsonArray(artifactPathMetadata)
+                env.LIBRARY_REPO = artifactPathVars.release
+            }
 
             if (env.DEPLOYMENT_TYPE == 'KUBERNETES' || env.DEPLOYMENT_TYPE == 'OPENSHIFT') {
                 String kubeProperties = parseJsonString(env.JENKINS_METADATA,'kubernetes')
@@ -334,7 +345,7 @@ pipeline {
                     }
               }
 
-            } else if ("${list[i]}" == "'containerImageScan'" && stage_flag['containerScan']) {
+            } else if ("${list[i]}" == "'containerImageScan'" && stage_flag['containerScan'] && "$PUBLISH_ARTIFACT" == "false") {
                  stage("Container Image Scan") {
                      if (env.CONTAINERSCANTYPE == 'XRAY') {
                          jf 'docker scan $REGISTRY_URL:$BUILD_TAG'
@@ -370,7 +381,14 @@ pipeline {
                 sudo chown -R `id -u`:`id -g` "$WORKSPACE" 
                 """
               }
-            } else if ("${list[i]}" == "'BuildContainerImage'" && env.ACTION == 'DEPLOY') {
+            }  else if ("${list[i]}" == "'publishArtifact'" && "$PUBLISH_ARTIFACT" == "true") {
+               stage('Publish Artifact') {
+                      withCredentials([usernamePassword(credentialsId: "$ARTIFACTORY_CREDENTIALS", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                     sh """
+                     docker run --rm  -v "$WORKSPACE":/opt/"$REPO_NAME" -w /opt/"$REPO_NAME" "$JFROGCLI_IMAGE_VERSION" /bin/bash -c "jf c add jfrog --password $PASSWORD --user $USERNAME --url="$ARTIFACTORY_URL" --artifactory-url="$ARTIFACTORY_URL"/artifactory --interactive=false --overwrite=true ; jf gradle-config --repo-deploy "$LIBRARY_REPO" --use-wrapper; jf gradle artifactoryPublish"  """
+                   }
+               }
+            } else if ("${list[i]}" == "'BuildContainerImage'" && env.ACTION == 'DEPLOY' && "$PUBLISH_ARTIFACT" == "false") {
                stage('Build Container Image') {   // no changes
                    // stage details here
                    echo "echoed BUILD_TAG--- $BUILD_TAG"
@@ -389,7 +407,7 @@ pipeline {
                    } */
                    sh 'docker build -t "$REGISTRY_URL:$BUILD_TAG" -t "$REGISTRY_URL:latest" .'
                }
-            }else if ("${list[i]}" == "'PublishContainerImage'" && (env.ACTION == 'DEPLOY' || env.ACTION == 'PROMOTE')) {
+            }else if ("${list[i]}" == "'PublishContainerImage'" && (env.ACTION == 'DEPLOY' || env.ACTION == 'PROMOTE') && "$PUBLISH_ARTIFACT" == "false") {
                         stage('Publish Container Image') {   // no changes
                             // stage details here
                             echo "Publish Container Image"
@@ -440,7 +458,7 @@ pipeline {
                              
                         }
               }
-            else if ("${list[i]}" == "'Deploy'") {
+            else if ("${list[i]}" == "'Deploy'" && "$PUBLISH_ARTIFACT" == "false") {
               stage('Deploy') {
                 // stage details here
                 if (env.ACTION == 'DEPLOY' || env.ACTION == 'PROMOTE' || env.ACTION == 'ROLLBACK') {
@@ -567,7 +585,7 @@ pipeline {
                     }
                 }
               }
-            } else if ("${list[i]}" == "'FunctionalTests'" && env.ACTION == 'DEPLOY' && stage_flag['FunctionalTesting']) {
+            } else if ("${list[i]}" == "'FunctionalTests'" && env.ACTION == 'DEPLOY' && stage_flag['FunctionalTesting'] && "$PUBLISH_ARTIFACT" == "false") {
                 stage('Functional Tests') {
                     waitforsometime()
                     dir('testcaseRepo') {
@@ -578,7 +596,7 @@ pipeline {
                         }
                     }
                 }
-            } else if ("${list[i]}" == "'Destroy'" && env.ACTION == 'DESTROY') {
+            } else if ("${list[i]}" == "'Destroy'" && env.ACTION == 'DESTROY' && "$PUBLISH_ARTIFACT" == "false") {
               stage('Destroy') {
                 // stage details here
                     if (env.DEPLOYMENT_TYPE == 'EC2') {
