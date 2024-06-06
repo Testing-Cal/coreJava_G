@@ -243,7 +243,7 @@ pipeline {
 
             env.PUBLISH_ARTIFACT = metadataVars.artifactPublish
             env.REPO_NAME = metadataVars.repoName
-            env.ARTIFACTORY_URL = metadataVars.artifactoryUrl
+            env.ARTIFACTORY_URL = metadataVars.artifactoryURL
             repoProperties = parseJsonString(env.JENKINS_METADATA,'general')
             if( metadataVars.artifactRepository){
                 artifactPathMetadata = parseJsonString(repoProperties,'artifactRepository')
