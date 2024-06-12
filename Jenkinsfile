@@ -241,7 +241,7 @@ pipeline {
             env.BROWSERTYPE = metadataVars.browserType
             env.CONTAINERSCANTYPE = metadataVars.containerScanType
 
-            env.PUBLISH_ARTIFACT = metadataVars.artifactPublish
+            env.PUBLISH_ARTIFACT = metadataVars.artifactPublish ?: "false"
             env.REPO_NAME = metadataVars.repoName
             env.ARTIFACTORY_URL = metadataVars.artifactoryURL
             repoProperties = parseJsonString(env.JENKINS_METADATA,'general')
