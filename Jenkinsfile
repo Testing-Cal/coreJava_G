@@ -381,7 +381,7 @@ pipeline {
                 sudo chown -R `id -u`:`id -g` "$WORKSPACE" 
                 """
               }
-            }  else if ("${list[i]}" == "'publishArtifact'" && "$PUBLISH_ARTIFACT" == "true") {
+            }  else if ("${list[i]}" == "'PublishArtifact'" && "$PUBLISH_ARTIFACT" == "true") {
                stage('Publish Artifact') {
                       withCredentials([usernamePassword(credentialsId: "$ARTIFACTORY_CREDENTIALS", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
                      sh """

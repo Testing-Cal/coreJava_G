@@ -58,7 +58,7 @@ pipeline {
     agent { label agentLabel }
     environment {
 
-        DEFAULT_STAGE_SEQ = "'Initialization','Build','UnitTests','SonarQubeScan','BuildContainerImage','containerImageScan','publishArtifact','PublishContainerImage'"
+        DEFAULT_STAGE_SEQ = "'Initialization','Build','UnitTests','SonarQubeScan','BuildContainerImage','containerImageScan','PublishArtifact','PublishContainerImage'"
         BRANCHES = "${env.GIT_BRANCH}"
         COMMIT = "${env.GIT_COMMIT}"
         SERVICE_PORT = "${APP_PORT}"
@@ -189,7 +189,7 @@ pipeline {
                                     """
                                 }
                             }
-                        }  else if ("${list[i]}" == "'publishArtifact'" && "$PUBLISH_ARTIFACT" == "true") {
+                        }  else if ("${list[i]}" == "'PublishArtifact'" && "$PUBLISH_ARTIFACT" == "true") {
                              stage('Publish Artifact') {
                                     withCredentials([usernamePassword(credentialsId: "$ARTIFACTORY_CREDENTIALS", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
                                    sh """
