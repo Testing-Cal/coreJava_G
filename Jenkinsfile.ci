@@ -58,7 +58,7 @@ pipeline {
     agent { label agentLabel }
     environment {
 
-        DEFAULT_STAGE_SEQ = "'Initialization','Build','UnitTests','SonarQubeScan','BuildContainerImage','ContainerImageScan','PublishContainerImage'"
+        DEFAULT_STAGE_SEQ = "'Initialization','Build','UnitTests','SonarQubeScan','BuildContainerImage','containerImageScan','PublishArtifact','PublishContainerImage'"
         BRANCHES = "${env.GIT_BRANCH}"
         COMMIT = "${env.GIT_COMMIT}"
         SERVICE_PORT = "${APP_PORT}"
@@ -73,6 +73,7 @@ pipeline {
         KUBECTL_IMAGE_VERSION = "bitnami/kubectl:1.28" //https://hub.docker.com/r/bitnami/kubectl/tags
         HELM_IMAGE_VERSION = "alpine/helm:3.8.1" //https://hub.docker.com/r/alpine/helm/tags
         OC_IMAGE_VERSION = "quay.io/openshift/origin-cli:4.9.0" //https://quay.io/repository/openshift/origin-cli?tab=tags
+        JFROGCLI_IMAGE_VERSION = "public.ecr.aws/lazsa/gradle-jf:jdk8"
 
     }
     stages {
@@ -93,6 +94,16 @@ pipeline {
                     env.ARTIFACTORY = metadataVars.artifactory
                     env.STAGE_FLAG = metadataVars.stageFlag
                     env.CONTAINERSCANTYPE = metadataVars.containerScanType
+
+                    env.PUBLISH_ARTIFACT = metadataVars.artifactPublish ?: "false"
+                    env.REPO_NAME = metadataVars.repoName
+                    env.ARTIFACTORY_URL = metadataVars.artifactoryURL
+                    repoProperties = parseJsonString(env.JENKINS_METADATA,'general')
+                    if( metadataVars.artifactRepository){
+                        artifactPathMetadata = parseJsonString(repoProperties,'artifactRepository')
+                        artifactPathVars = parseJsonArray(artifactPathMetadata)
+                        env.LIBRARY_REPO = artifactPathVars.release
+                    }
                     env.DOCKERHOST = metadataVars.dockerHostIP
                     env.RELEASE_NAME = metadataVars.name
                     env.PROJECT_TEMPLATE_ACTIVE = metadataVars.dynamicJenkinsStage
@@ -176,7 +187,14 @@ pipeline {
                                     """
                                 }
                             }
-                        } else if ("${list[i]}" == "'ContainerImageScan'" && stage_flag['containerScan']) {
+                        }  else if ("${list[i]}" == "'PublishArtifact'" && "$PUBLISH_ARTIFACT" == "true") {
+                             stage('Publish Artifact') {
+                                    withCredentials([usernamePassword(credentialsId: "$ARTIFACTORY_CREDENTIALS", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                                   sh """
+                                   docker run --rm  -v "$WORKSPACE":/opt/"$REPO_NAME" -w /opt/"$REPO_NAME" "$JFROGCLI_IMAGE_VERSION" /bin/bash -c "jf c add jfrog --password "$PASSWORD" --user "$USERNAME" --url="$ARTIFACTORY_URL" --artifactory-url="$ARTIFACTORY_URL"/artifactory --interactive=false --overwrite=true ; jf gradle-config --repo-deploy "$LIBRARY_REPO" --use-wrapper; jf gradle artifactoryPublish"  """
+                                 }
+                             }
+                        } else if ("${list[i]}" == "'containerImageScan'" && stage_flag['containerScan']  && "$PUBLISH_ARTIFACT" == "false") {
                               stage("Container Image Scan") {
                                   if (env.CONTAINERSCANTYPE == 'XRAY') {
                                       jf 'docker scan $REGISTRY_URL:$BUILD_TAG'
@@ -200,7 +218,7 @@ pipeline {
                                           sysdig inlineScanning: true, bailOnFail: true, bailOnPluginFail: true, name: 'sysdig_secure_images'
                                   }
                               }
-                          } else if ("${list[i]}" == "'BuildContainerImage'") {
+                          } else if ("${list[i]}" == "'BuildContainerImage'" && "$PUBLISH_ARTIFACT" == "false") {
                                stage('Build Container Image') {   // no changes
                                    // stage details here
                                    echo "echoed BUILD_TAG--- $BUILD_TAG"
@@ -219,7 +237,7 @@ pipeline {
                                    } */
                                    sh 'docker build -t "$REGISTRY_URL:$BUILD_TAG" -t "$REGISTRY_URL:latest" .'
                                }
-                        } else if ("${list[i]}" == "'PublishContainerImage'") {
+                        } else if ("${list[i]}" == "'PublishContainerImage'" && "$PUBLISH_ARTIFACT" == "false") {
                                 stage('Publish Container Image') {   // no changes
                                     // stage details here
                                     echo "Publish Container Image"
