@@ -1,15 +1,6 @@
 plugins {
     id 'java'
-    id 'org.sonarqube' version '3.0'
     id 'jacoco'
-}
-
-sonarqube {
-    properties {
-        property "sonar.jacoco.reportPath", "${project.buildDir}/jacoco/test.exec"
-        property "sonar.junit.reportPaths", "${project.buildDir}/test-results/test"
-        property "sonar.coverage.jacoco.xmlReportPaths", "${project.buildDir}/test-results/test"
-    }
 }
 
 jacocoTestReport {
@@ -22,37 +13,47 @@ jacocoTestReport {
 
 group 'com.template.demo'
 version '1.0-SNAPSHOT'
-
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(8)
+    }
+}
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    testCompile group: 'junit', name: 'junit', version: '4.12'
-//    compile group: 'org.springframework', name: 'spring-core', version: '5.3.2'
-//    compile group: 'org.springframework', name: 'spring-web', version: '5.3.2'
-    compile group: 'org.apache.tomcat.embed', name: 'tomcat-embed-core', version: '8.5.5'
-// https://mvnrepository.com/artifact/org.springframework/spring-context
-//    compile group: 'org.springframework', name: 'spring-context', version: '5.3.2'
+   // testCompile group: 'junit', name: 'junit', version: '4.12'
+    //compile group: 'org.apache.tomcat.embed', name: 'tomcat-embed-core', version: '9.0.90'
+   // compile group: 'org.apache.tomcat', name: 'tomcat-jasper-el', version: '9.0.90'
+    //compile group: 'org.apache.tomcat', name: 'tomcat-jsp-api', version: '9.0.90'
+   // compile group: 'org.apache.tomcat', name: 'tomcat-jasper', version: '9.0.90'
+    //compile group: 'jakarta.servlet', name: 'jakarta.servlet-api', version: '4.0.4'
 
-    //compile group: 'org.apache.tomcat.embed', name: 'tomcat-embed-core', version: '8.5.0'
-    /*compile group: 'org.apache.tomcat.embed', name: 'tomcat-embed-jasper', version: '10.0.0'*/
-   /* compile group: 'org.apache.tomcat', name: 'tomcat-jasper-el', version: '10.0.0'
-    compile group: 'org.apache.tomcat', name: 'tomcat-jsp-api', version: '10.0.0'
-    compile group: 'org.apache.tomcat', name: 'tomcat-jasper', version: '10.0.0'*/
-    compile group: 'org.apache.tomcat', name: 'tomcat-jasper-el', version: '8.5.5'
-    compile group: 'org.apache.tomcat', name: 'tomcat-jsp-api', version: '8.5.5'
-    compile group: 'org.apache.tomcat', name: 'tomcat-jasper', version: '8.5.5'
-    compile group: 'javax.servlet', name: 'javax.servlet-api', version: '4.0.1'
+    implementation group: 'org.apache.tomcat.embed', name: 'tomcat-embed-core', version: '9.0.90'
+    implementation group: 'org.apache.tomcat', name: 'tomcat-jasper-el', version: '9.0.90'
+    implementation group: 'org.apache.tomcat', name: 'tomcat-jsp-api', version: '9.0.90'
+    implementation group: 'org.apache.tomcat', name: 'tomcat-jasper', version: '9.0.90'
+    implementation group: 'jakarta.servlet', name: 'jakarta.servlet-api', version: '4.0.4'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params:5.10.0'
+}
+
+
+test {
+    useJUnitPlatform()
 }
 
 jar {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest {
         attributes(
-                'Class-Path': configurations.compile.collect { it.getName() }.join(' '),
+                'Class-Path': configurations.compileClasspath.collect { it.getName() }.join(' '),
                 'Main-Class': 'com.template.demo.DemoHelloWorld'
         )
     }
-    from { (configurations.runtime).collect { it.isDirectory() ? it : zipTree(it) } }
+    from { (configurations.runtimeClasspath).collect { it.isDirectory() ? it : zipTree(it) } }
     exclude 'META-INF/*.RSA', 'META-INF/*.SF','META-INF/*.DSA'
 }

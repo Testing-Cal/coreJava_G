@@ -69,8 +69,8 @@ pipeline {
 
         JENKINS_METADATA = "${JENKINS_METADATA}"
 
-        JAVA_MVN_IMAGE_VERSION = "maven:3.8.6-jdk-8-slim" //https://hub.docker.com/_/maven/tags
-        KUBECTL_IMAGE_VERSION = "bitnami/kubectl:1.24.9" //https://hub.docker.com/r/bitnami/kubectl/tags
+        JAVA_MVN_IMAGE_VERSION = "amazoncorretto:8-alpine" //https://hub.docker.com/_/maven/tags
+        KUBECTL_IMAGE_VERSION = "bitnami/kubectl:1.28" //https://hub.docker.com/r/bitnami/kubectl/tags
         HELM_IMAGE_VERSION = "alpine/helm:3.8.1" //https://hub.docker.com/r/alpine/helm/tags
         OC_IMAGE_VERSION = "quay.io/openshift/origin-cli:4.9.0" //https://quay.io/repository/openshift/origin-cli?tab=tags
         JFROGCLI_IMAGE_VERSION = "public.ecr.aws/lazsa/gradle-jf:jdk8"
@@ -156,35 +156,33 @@ pipeline {
                         if ("${list[i]}" == "'UnitTests'") {
                             stage('Unit Tests') {
                                 sh """
-                                docker run --rm -v "$WORKSPACE":/usr/src/mymaven -w /usr/src/mymaven $JAVA_MVN_IMAGE_VERSION ./gradlew test
+                                 docker run --rm -v "$WORKSPACE":/opt/repo -w /opt/repo $JAVA_MVN_IMAGE_VERSION ./gradlew test jacocoTestReport
                                 """
                             }
                         }
                         else if ("${list[i]}" == "'SonarQubeScan'" && stage_flag['sonarScan']) {
                             stage('SonarQube Scan ') {
                                 // stage details here
-                                 def sonar_org = "${metadataVars.sonarOrg}";
-                                 def sonar_project_key = "${metadataVars.sonarProjectKey}";
-
+                                 env.sonar_org = "${metadataVars.sonarOrg}"
+                                 env.sonar_project_key = "${metadataVars.sonarProjectKey}"
+                                 env.sonar_host = "${metadataVars.sonarHost}"
 
                                  if (env.SONAR_CREDENTIAL_ID != null && env.SONAR_CREDENTIAL_ID != '') {
                                       withCredentials([usernamePassword(credentialsId: "$SONAR_CREDENTIAL_ID", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
-                                         //sh """JAVA_HOME=/usr/lib/jvm/jdk-1.8 ./gradlew sonarqube -Dsonar.verbose=true -Dsonar.projectKey="${sonar_project_key}" -Dsonar.projectName="${sonar_project_key}"  -Dsonar.java.binaries=build/classes  -Dsonar.host.url="${metadataVars.sonarHost}" -Dsonar.organization="${metadataVars.sonarOrg}" -Dsonar.login=$PASSWORD --stacktrace"""
-                                         sh """docker run -v "$WORKSPACE":/app -w /app sonarsource/sonar-scanner-cli:4.7.0 -Dsonar.verbose=true -Dsonar.projectKey="${sonar_project_key}" -Dsonar.projectName="${sonar_project_key}" -Dsonar.organization="${metadataVars.sonarOrg}" -Dsonar.java.binaries=build/classes -Dsonar.junit.reportPaths=./build/test-results/test -Dsonar.coverage.jacoco.xmlReportPaths=./build/reports/jacoco/test/html -Dsonar.exclusions=build/reports/**.*,build/test-results/**.* -Dsonar.host.url="${metadataVars.sonarHost}" -Dsonar.login=$PASSWORD"""
-                                       }
+                                         sh '''docker run -v "$WORKSPACE":/app -w /app sonarsource/sonar-scanner-cli:11.0 -Dsonar.sources=src -Dsonar.projectKey="$sonar_project_key" -Dsonar.projectName="$sonar_project_key" -Dsonar.organization="$sonar_org" -Dsonar.java.binaries=build/classes -Dsonar.junit.reportPaths=./build/test-results/test -Dsonar.coverage.jacoco.xmlReportPaths=./build/reports/jacoco/test/html -Dsonar.exclusions=build/reports/**.*,build/test-results/**.* -Dsonar.host.url="$sonar_host" -Dsonar.login=$PASSWORD -Dsonar.token=$PASSWORD'''
+                                      }
                                  }
                                  else{
                                      withSonarQubeEnv('pg-sonar') {
-                                         //sh """JAVA_HOME=/usr/lib/jvm/jdk-1.8 ./gradlew sonarqube -Dsonar.verbose=true -Dsonar.projectKey="${sonar_project_key}" -Dsonar.projectName="${sonar_project_key}" -Dsonar.organization="${metadataVars.sonarOrg}" -Dsonar.junit.reportPaths=./build/test-results/test -Dsonar.java.binaries=build/classes -Dsonar.coverage.jacoco.xmlReportPaths=./build/reports/tests/test/index.html --stacktrace"""
-                                         sh """docker run -v "$WORKSPACE":/app -w /app sonarsource/sonar-scanner-cli:4.7.0 -Dsonar.verbose=true -Dsonar.projectKey="${sonar_project_key}" -Dsonar.projectName="${sonar_project_key}" -Dsonar.organization="${metadataVars.sonarOrg}" -Dsonar.junit.reportPaths=./build/test-results/test -Dsonar.java.binaries=build/classes -Dsonar.coverage.jacoco.xmlReportPaths=./build/reports/tests/test/index.html -Dsonar.host.url="$SONAR_HOST_URL" -Dsonar.login=$SONAR_AUTH_TOKEN """
-                                         }
+                                         sh '''docker run -v "$WORKSPACE":/app -w /app sonarsource/sonar-scanner-cli:11.0 -Dsonar.sources=src -Dsonar.projectKey="$sonar_project_key" -Dsonar.projectName="$sonar_project_key" -Dsonar.organization="$sonar_org" -Dsonar.junit.reportPaths=./build/test-results/test -Dsonar.java.binaries=build/classes -Dsonar.coverage.jacoco.xmlReportPaths=./build/reports/tests/test/index.html -Dsonar.host.url="$SONAR_HOST_URL" -Dsonar.login=$SONAR_AUTH_TOKEN -Dsonar.token=$SONAR_AUTH_TOKEN '''
+                                     }
                                  }
                             }
                         } else if ("${list[i]}" == "'Build'") {
                             stage('Build') {
                                 script {
                                     sh """
-                                    docker run --rm -v "$WORKSPACE":/usr/src/mymaven -w /usr/src/mymaven $JAVA_MVN_IMAGE_VERSION ./gradlew clean build jacocoTestReport --refresh-dependencies
+                                    docker run --rm -v "$WORKSPACE":/opt/repo -w /opt/repo $JAVA_MVN_IMAGE_VERSION ./gradlew clean build jacocoTestReport --refresh-dependencies
                                     sudo chown -R `id -u`:`id -g` "$WORKSPACE"
                                     """
                                 }

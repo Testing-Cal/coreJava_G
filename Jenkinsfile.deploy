@@ -220,7 +220,7 @@ pipeline {
         CHROME_BIN = "/usr/bin/google-chrome"
         JENKINS_METADATA = "${JENKINS_METADATA}"
 
-        KUBECTL_IMAGE_VERSION = "bitnami/kubectl:1.24.9" //https://hub.docker.com/r/bitnami/kubectl/tags
+        KUBECTL_IMAGE_VERSION = "bitnami/kubectl:1.28" //https://hub.docker.com/r/bitnami/kubectl/tags
         HELM_IMAGE_VERSION = "alpine/helm:3.8.1" //https://hub.docker.com/r/alpine/helm/tags
         OC_IMAGE_VERSION = "quay.io/openshift/origin-cli:4.9.0" //https://quay.io/repository/openshift/origin-cli?tab=tags
 
@@ -402,6 +402,7 @@ pipeline {
                                         }
 
                                         sh 'ssh -o "StrictHostKeyChecking=no" ciuser@$DOCKERHOST "sleep 5s"'
+                                        sh 'ssh -o "StrictHostKeyChecking=no" ciuser@$DOCKERHOST "docker image prune -a -f"'
                                         sh 'ssh -o "StrictHostKeyChecking=no" ciuser@$DOCKERHOST "docker pull "$REGISTRY_URL:$BUILD_TAG""'
                                         sh """ssh -o "StrictHostKeyChecking=no" ciuser@$DOCKERHOST "docker stop "${metadataVars.repoName}" || true && docker rm "${metadataVars.repoName}" || true" """
                                             // Read Docker Vault properties
@@ -429,24 +430,26 @@ pipeline {
                                                     withVault([configuration: vaultConfigurations, vaultSecrets: [vaultSecretConfigData]]) {
                                                         def data = []
                                                         for(secret in dockerEnv){
-                                                            sh "echo $secret"
+                                                            sh "echo " + secret
                                                         }
                                                         for(keys in secretkeys){
-                                                            sh "echo $keys=\$(cat .$keys) >> .secrets"
+                                                            env.keys = "$keys"
+                                                       sh '''set +x; echo ${keys}=\$(cat .${keys}) >> .${RELEASE_NAME} '''
                                                         }
-                                                        sh 'cat .secrets;'
+                                                        sh '''set +x; cat .${RELEASE_NAME};'''
                                                     }
-                                                    def result = sh(script: 'cat .secrets', returnStdout: true)
+                                                    // def result = sh(script: 'cat .${RELEASE_NAME}', returnStdout: true)
 
-                                                    sh 'scp -o "StrictHostKeyChecking=no" .secrets ciuser@$DOCKERHOST:/home/ciuser/docker-env'
+                                                    sh 'scp -o "StrictHostKeyChecking=no" .${RELEASE_NAME} ciuser@$DOCKERHOST:/home/ciuser/.${RELEASE_NAME}'
                                                     //sh 'ssh -o "StrictHostKeyChecking=no" ciuser@$DOCKERHOST "echo $SECRETS > secrets"'
-                                                    sh 'rm -rf .secrets'
+                                                    sh 'rm -rf .${RELEASE_NAME}'
                                                     if (env.DEPLOYMENT_TYPE == 'EC2' && env.CONTEXT == 'null') {
-                                                    sh """ ssh -o "StrictHostKeyChecking=no" ciuser@$DOCKERHOST "docker run -d --restart always --name "${metadataVars.repoName}"  --env-file docker-env -p ${dockerData.hostPort}:$SERVICE_PORT -e port=$SERVICE_PORT $REGISTRY_URL:$BUILD_TAG" """
+                                                    sh """ ssh -o "StrictHostKeyChecking=no" ciuser@$DOCKERHOST "docker run -d --restart always --name "${metadataVars.repoName}"  --env-file .${RELEASE_NAME} -p ${dockerData.hostPort}:$SERVICE_PORT -e port=$SERVICE_PORT $REGISTRY_URL:$BUILD_TAG" """
                                                     }
                                                     else if (env.DEPLOYMENT_TYPE == 'EC2' && env.CONTEXT != 'null') {
-                                                    sh """ ssh -o "StrictHostKeyChecking=no" ciuser@$DOCKERHOST "docker run -d --restart always --name "${metadataVars.repoName}"  --env-file docker-env   -p ${dockerData.hostPort}:$SERVICE_PORT -e context=$CONTEXT -e port=$SERVICE_PORT $REGISTRY_URL:$BUILD_TAG" """
+                                                    sh """ ssh -o "StrictHostKeyChecking=no" ciuser@$DOCKERHOST "docker run -d --restart always --name "${metadataVars.repoName}"  --env-file .${RELEASE_NAME}   -p ${dockerData.hostPort}:$SERVICE_PORT -e context=$CONTEXT -e port=$SERVICE_PORT $REGISTRY_URL:$BUILD_TAG" """
                                                     }
+                                                    sh """ ssh -o "StrictHostKeyChecking=no" ciuser@$DOCKERHOST "rm -rf /home/ciuser/.${RELEASE_NAME}" """
 
                                                 }
                                             }
@@ -462,10 +465,11 @@ pipeline {
                                     }
                                     if (env.DEPLOYMENT_TYPE == 'KUBERNETES' || env.DEPLOYMENT_TYPE == 'OPENSHIFT') {
                                         withCredentials([file(credentialsId: "$KUBE_SECRET", variable: 'KUBECONFIG'), usernamePassword(credentialsId: "$ARTIFACTORY_CREDENTIALS", usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
-                                            sh """
-                                                 sed -i s+#SERVICE_NAME#+"${metadataVars.helmReleaseName}"+g ./helm_chart/values.yaml ./helm_chart/Chart.yaml
+                                            env.helmReleaseName = "${metadataVars.helmReleaseName}"
+                                            sh '''
+                                                 sed -i s+#SERVICE_NAME#+"$helmReleaseName"+g ./helm_chart/values.yaml ./helm_chart/Chart.yaml
                                                  docker run --rm  --user root -v "$KUBECONFIG":"$KUBECONFIG" -e KUBECONFIG="$KUBECONFIG" $KUBECTL_IMAGE_VERSION create ns "$namespace_name" || true
-                                            """
+                                            '''
                                             if (env.DEPLOYMENT_TYPE == 'OPENSHIFT') {
                                                 sh '''
                                                     COUNT=$(grep 'serviceAccount' Helm.yaml | wc -l)
@@ -494,23 +498,25 @@ pipeline {
                                                '''
                                            }
                                            if (helmVars.helmRepoUrl != null && helmVars.helmRepoUrl != '') {
+                                              env.temp_workingDirectory = "${helmVars.workingDirectory}"
+                                              env.helmvalues = "${helmVars.values}"
                                               dir('externalChart') {
                                                   checkout([$class: 'GitSCM', branches: [[name: "${helmVars.helmRepoBranch}"]], userRemoteConfigs: [[url: "${helmVars.helmRepoUrl}", credentialsId: scm.userRemoteConfigs[0].credentialsId]]])
-                                                  sh """
+                                                  sh '''
                                                   ### Command for running External helm Chart
-                                                   docker run --rm  --user root -v "$KUBECONFIG":"$KUBECONFIG" -e KUBECONFIG="$KUBECONFIG" -v "$WORKSPACE":/apps -w /apps/externalChart $HELM_IMAGE_VERSION upgrade --install "${metadataVars.helmReleaseName}" -n "$namespace_name" "${helmVars.workingDirectory}" --atomic --timeout 300s --set image.repository="$REGISTRY_URL" --set image.tag="$BUILD_TAG" --set image.registrySecret="$kube_secret_name_for_registry"  --set service.internalport="$SERVICE_PORT" --set context="$CONTEXT" -f "${helmVars.values}" -f ../vault.yaml
-                                                   """
+                                                   docker run --rm  --user root -v "$KUBECONFIG":"$KUBECONFIG" -e KUBECONFIG="$KUBECONFIG" -v "$WORKSPACE":/apps -w /apps/externalChart $HELM_IMAGE_VERSION upgrade --install "$helmReleaseName" -n "$namespace_name" "$temp_workingDirectory" --atomic --timeout 300s --set image.repository="$REGISTRY_URL" --set image.tag="$BUILD_TAG" --set image.registrySecret="$kube_secret_name_for_registry"  --set service.internalport="$SERVICE_PORT" --set context="$CONTEXT" -f "$helmvalues" -f ../vault.yaml
+                                                  '''
 
                                               }
 
                                            } else {
-                                              sh """
+                                              sh '''
                                                ls -lart
                                                echo "context: $CONTEXT" >> Helm.yaml
                                                cat Helm.yaml
-                                               sed -i s+#SERVICE_NAME#+"${metadataVars.helmReleaseName}"+g ./helm_chart/values.yaml ./helm_chart/Chart.yaml
-                                               docker run --rm  --user root -v "$KUBECONFIG":"$KUBECONFIG" -e KUBECONFIG="$KUBECONFIG" -v "$WORKSPACE":/apps -w /apps $HELM_IMAGE_VERSION upgrade --install "${metadataVars.helmReleaseName}" -n "$namespace_name" helm_chart --atomic --timeout 300s --set image.repository="$REGISTRY_URL" --set image.tag="$BUILD_TAG" --set image.registrySecret="$kube_secret_name_for_registry"  --set service.internalport="$SERVICE_PORT" -f Helm.yaml
-                                               """
+                                               sed -i s+#SERVICE_NAME#+"$helmReleaseName"+g ./helm_chart/values.yaml ./helm_chart/Chart.yaml
+                                               docker run --rm  --user root -v "$KUBECONFIG":"$KUBECONFIG" -e KUBECONFIG="$KUBECONFIG" -v "$WORKSPACE":/apps -w /apps $HELM_IMAGE_VERSION upgrade --install "$helmReleaseName" -n "$namespace_name" helm_chart --atomic --timeout 300s --set image.repository="$REGISTRY_URL" --set image.tag="$BUILD_TAG" --set image.registrySecret="$kube_secret_name_for_registry"  --set service.internalport="$SERVICE_PORT" -f Helm.yaml
+                                               '''
                                            }
                                         }
                                     }
@@ -540,9 +546,10 @@ pipeline {
                                 }
                                 if (env.DEPLOYMENT_TYPE == 'KUBERNETES' || env.DEPLOYMENT_TYPE == 'OPENSHIFT') {
                                     withCredentials([file(credentialsId: "$KUBE_SECRET", variable: 'KUBECONFIG')]) {
-                                      sh """
-                                      docker run --rm  --user root -v "$KUBECONFIG":"$KUBECONFIG" -e KUBECONFIG="$KUBECONFIG" -v "$WORKSPACE":/apps -w /apps $HELM_IMAGE_VERSION uninstall "${metadataVars.helmReleaseName}" -n "$namespace_name"
-                                      """
+                                      env.helmReleaseName = "${metadataVars.helmReleaseName}"
+                                      sh '''
+                                      docker run --rm  --user root -v "$KUBECONFIG":"$KUBECONFIG" -e KUBECONFIG="$KUBECONFIG" -v "$WORKSPACE":/apps -w /apps $HELM_IMAGE_VERSION uninstall "$helmReleaseName" -n "$namespace_name"
+                                      '''
                                     }
                                 }
                             }
