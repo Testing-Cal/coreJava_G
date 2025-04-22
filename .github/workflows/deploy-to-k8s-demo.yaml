@@ -1,0 +1,164 @@
+name: Deploy-to-k8s-Demo
+
+on: 
+  workflow_dispatch:
+  workflow_run:
+    workflows: 'CI-Demo'
+    types:
+      - completed
+
+jobs:
+  continuous-deployment:
+    runs-on: ${{ vars.RUNNER_NAME_Demo }}
+    environment:
+      name: "Demo"
+    env:
+      KUBECTL_IMAGE_VERSION: "bitnami/kubectl:1.28" #https://hub.docker.com/r/bitnami/kubectl/tags
+      HELM_IMAGE_VERSION: "alpine/helm:3.8.1" #https://hub.docker.com/r/alpine/helm/tags
+      OC_IMAGE_VERSION: "quay.io/openshift/origin-cli:4.9.0" #https://quay.io/repository/openshift/origin-cli?tab=tags
+
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v2
+          
+      - name: Initialization
+        run: |
+          sudo apt install yq -y 
+          JSON_STRING='${{ vars.CD_METADATA }}'
+
+          # push to collector
+          echo "TENANT_ID=$(echo "$JSON_STRING" | jq -r '.general.tenant')" >> "$GITHUB_ENV"
+          echo "TARGET_URI=$(echo "$JSON_STRING" | jq -r '.general.lazsaDomainUri')" >> "$GITHUB_ENV"
+          echo "AGENT_ID=$(echo "$JSON_STRING" | jq -r '.general.agentId')" >> "$GITHUB_ENV"
+          echo "AGENT_API_KEY=$(echo "$JSON_STRING" | jq -r '.general.agentApiKey')" >> "$GITHUB_ENV"
+          echo "DEVOPS_SETTING_ID=$(echo "$JSON_STRING" | jq -r '.general.devopsSettingId')" >> "$GITHUB_ENV"
+         
+          echo "REGISTRY_URL=$(echo "$JSON_STRING" | jq -r '.general.containerImagePath')" >> "$GITHUB_ENV"
+          echo "BUILD_TAG=$(echo "$JSON_STRING" | jq -r '.general.containerImageTag')"  >> "$GITHUB_ENV"
+          echo "ARTIFACTORY=$(echo "$JSON_STRING" | jq -r '.general.artifactory')"  >> "$GITHUB_ENV"
+          echo "REPO_NAME=$(echo "$JSON_STRING" | jq -r '.general.repoName')"  >> "$GITHUB_ENV"
+          echo "CONTEXT=$(echo "$JSON_STRING" | jq -r '.general.contextPath')" >> "$GITHUB_ENV"
+          
+          echo "HELM_RELEASE_NAME=$(echo "$JSON_STRING" | jq -r '.general.helmReleaseName')" >> "$GITHUB_ENV"
+          echo "KUBE_NAMESPACE=$(echo "$JSON_STRING" | jq -r '.kubernetes.namespace')" >> "$GITHUB_ENV"
+          echo "ARTIFACTORY_USER_SECRET=$(echo "$JSON_STRING" | jq -r '.general.artifactoryUserSecret')" >> "$GITHUB_ENV"
+          echo "ARTIFACTORY_PASSWORD_SECRET=$(echo "$JSON_STRING" | jq -r '.general.artifactoryPasswordSecret')" >> "$GITHUB_ENV"
+          export REGISTRY_URL="$(echo "$JSON_STRING" | jq -r '.general.containerImagePath')"
+          echo "DOCKER_LOGIN_URL=$(echo "$REGISTRY_URL" | cut -d'/' -f1)" >> "$GITHUB_ENV"
+          echo "ACTION=$(echo "$JSON_STRING" | jq -r '.general.action')" >> "$GITHUB_ENV"
+          echo "K8S_SECRET_NAME=$(echo "$JSON_STRING" | jq -r '.general.artifactoryPasswordSecret' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//' | cut -c1-253)" >> "$GITHUB_ENV"
+
+          #promotion workflow
+          echo "PROMOTE_SOURCE=$(echo "$JSON_STRING" | jq -r '.general.promoteSource')" >> "$GITHUB_ENV"
+          echo "PROMOTE_SOURCE_ARTIFACTORY_USER_SECRET=$(echo "$JSON_STRING" | jq -r '.general.promoteSourceArtifactoryUserSecret')" >> "$GITHUB_ENV"
+          echo "PROMOTE_SOURCE_ARTIFACTORY_PASSWORD_SECRET=$(echo "$JSON_STRING" | jq -r '.general.promoteSourceArtifactoryPasswordSecret')" >> "$GITHUB_ENV"
+          echo "PROMOTE_SOURCE_ARTIFACTORY_TYPE=$(echo "$JSON_STRING" | jq -r '.general.promoteSourceArtifactoryType')" >> "$GITHUB_ENV"
+          echo "PROMOTE_TAG=$(echo "$JSON_STRING" | jq -r '.general.promoteTag')" >> "$GITHUB_ENV"
+          echo "ROLLBACK_TAG=$(echo "$JSON_STRING" | jq -r '.general.rollbackTag')" >> "$GITHUB_ENV"
+
+          echo "$JSON_STRING" | jq -r '.kubernetes' | yq --yaml-output > Helm.yaml
+          #echo "$JSON_STRING" | jq -r '.kubernetes.vault' | yq  > Vault.yaml    
+          
+
+      - name: Configure Kubeconfig File
+        env:
+          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ env.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+      
+      - name: Artifact Promotion 
+        if: env.ACTION == 'PROMOTE'
+        run: | 
+          if [[ $ARTIFACTORY == "ECR" ]]
+          then
+            ECR_REGION=$(echo "$REGISTRY_URL" | cut -d'.' -f4)
+            set +x 
+            AWS_ACCESS_KEY_ID=${{ secrets[env.ARTIFACTORY_USER_SECRET] }} AWS_SECRET_ACCESS_KEY=${{ secrets[env.ARTIFACTORY_PASSWORD_SECRET] }} aws ecr get-login-password --region "$ECR_REGION" | docker login --username AWS --password-stdin $DOCKER_LOGIN_URL 
+            set -x
+          else
+            docker login -u ${{ secrets[env.ARTIFACTORY_USER_SECRET] }} -p ${{ secrets[env.ARTIFACTORY_PASSWORD_SECRET] }} "$DOCKER_LOGIN_URL"
+          fi
+          PROMOTE_SOURCE_LOGIN_URL=$(echo "$PROMOTE_SOURCE" | cut -d'/' -f1)
+          if [[ $PROMOTE_SOURCE_ARTIFACTORY_TYPE == "ECR" ]]
+          then
+            REGION=$(echo "$PROMOTE_SOURCE" | cut -d'.' -f4)
+            PROMOTE_SOURCE_ECR_REGION=$(echo "$PROMOTE_SOURCE" | cut -d'.' -f4)
+            set +x 
+            AWS_ACCESS_KEY_ID=${{ secrets[env.PROMOTE_SOURCE_ARTIFACTORY_USER_SECRET] }} AWS_SECRET_ACCESS_KEY=${{ secrets[env.PROMOTE_SOURCE_ARTIFACTORY_PASSWORD_SECRET] }} aws ecr get-login-password --region "$PROMOTE_SOURCE_ECR_REGION" | docker login --username AWS --password-stdin $PROMOTE_SOURCE_LOGIN_URL 
+            set -x
+          else
+            docker login -u ${{ secrets[env.PROMOTE_SOURCE_ARTIFACTORY_USER_SECRET] }} -p ${{ secrets[env.PROMOTE_SOURCE_ARTIFACTORY_PASSWORD_SECRET] }} "$PROMOTE_SOURCE_LOGIN_URL"
+          fi
+
+          docker pull $PROMOTE_SOURCE
+          docker image tag $PROMOTE_SOURCE $REGISTRY_URL:$PROMOTE_TAG
+          docker push $REGISTRY_URL:$PROMOTE_TAG
+          echo "BUILD_TAG=$PROMOTE_TAG"  >> "$GITHUB_ENV"
+
+          
+      - name: Deploy to Kubernetes
+        if: env.ACTION == 'DEPLOY' || env.ACTION == 'PROMOTE' || env.ACTION == 'ROLLBACK'
+        run: |
+           if [[ $ACTION == "ROLLBACK" ]]
+           then
+                  echo "Running Rollback"
+                  export BUILD_TAG=$ROLLBACK_TAG
+                  echo "Build Tag: $BUILD_TAG"
+           fi
+
+           docker run --rm  --user root -v "$HOME/.kube/config":"/.kube/config" -e KUBECONFIG="/.kube/config" $KUBECTL_IMAGE_VERSION create ns "$KUBE_NAMESPACE" || true
+           if [[ $DEPLOYMENT_TYPE == 'OPENSHIFT' ]]
+           then
+              COUNT=$(grep 'serviceAccount' Helm.yaml | wc -l)
+              if [[ $COUNT -gt 0 ]]
+              then
+                  ACCOUNT=$(grep 'serviceAccount:' Helm.yaml | tail -n1 | awk '{ print $2}')
+                  echo $ACCOUNT
+              else
+                  ACCOUNT='default'
+              fi
+              docker run --rm  --user root -v "$HOME/.kube/config":"/.kube/config" -e KUBECONFIG="/.kube/config" -v "$GITHUB_WORKSPACE":/apps -w /apps $OC_IMAGE_VERSION oc adm policy add-scc-to-user anyuid -z $ACCOUNT -n "$KUBE_NAMESPACE"
+           fi
+           
+            
+           if [[ $ARTIFACTORY != "ECR" ]]
+           then
+             ## hardcoded name regcred need to be change
+             docker run --rm  --user root -v "$HOME/.kube/config":"/.kube/config" -e KUBECONFIG="/.kube/config" $KUBECTL_IMAGE_VERSION -n "$KUBE_NAMESPACE" delete secret "$K8S_SECRET_NAME" --ignore-not-found || true
+             docker run --rm  --user root -v "$HOME/.kube/config":"/.kube/config" -e KUBECONFIG="/.kube/config" $KUBECTL_IMAGE_VERSION -n "$KUBE_NAMESPACE" create secret docker-registry "$K8S_SECRET_NAME" --docker-server="$DOCKER_LOGIN_URL" --docker-username=${{ secrets[env.ARTIFACTORY_USER_SECRET] }} --docker-password=${{ secrets[env.ARTIFACTORY_PASSWORD_SECRET] }} || true
+           fi
+            
+           echo "context: $CONTEXT" >> Helm.yaml
+           cat Helm.yaml
+           sed -i s+#SERVICE_NAME#+"$HELM_RELEASE_NAME"+g ./helm_chart/values.yaml ./helm_chart/Chart.yaml
+           docker run --rm  --user root -v "$HOME/.kube/config":"/.kube/config" -e KUBECONFIG="/.kube/config" -v "$GITHUB_WORKSPACE":/apps -w /apps $HELM_IMAGE_VERSION template "$HELM_RELEASE_NAME" -n "$KUBE_NAMESPACE" helm_chart --atomic --timeout 300s --set image.repository="$REGISTRY_URL" --set image.tag="$BUILD_TAG" --set image.registrySecret="$K8S_SECRET_NAME" -f Helm.yaml
+           docker run --rm  --user root -v "$HOME/.kube/config":"/.kube/config" -e KUBECONFIG="/.kube/config" -v "$GITHUB_WORKSPACE":/apps -w /apps $HELM_IMAGE_VERSION upgrade --install "$HELM_RELEASE_NAME" -n "$KUBE_NAMESPACE" helm_chart --atomic --timeout 300s --set image.repository="$REGISTRY_URL" --set image.tag="$BUILD_TAG" --set image.registrySecret="$K8S_SECRET_NAME" -f Helm.yaml
+
+      - name: Destroy
+        if: env.ACTION == 'DESTROY'
+        run: | 
+         docker run --rm  --user root -v "$HOME/.kube/config":"/.kube/config" -e KUBECONFIG="/.kube/config" -v "$GITHUB_WORKSPACE":/apps -w /apps $HELM_IMAGE_VERSION uninstall "$HELM_RELEASE_NAME" -n "$KUBE_NAMESPACE"  
+
+      - name: Push to collector
+        if: always()
+        run: |
+          sudo chown -R `id -u`:`id -g` "$GITHUB_WORKSPACE"
+          echo "Workflow Run ID:${GITHUB_RUN_ID}, Workflow Run Number: ${GITHUB_RUN_NUMBER}, Workflow Name: ${GITHUB_WORKFLOW}, Github Repository: ${GITHUB_REPOSITORY}, Job Name: ${GITHUB_JOB}, Tenant ID: $TENANT_ID, Target URI: $TARGET_URI"
+          if [[ $TENANT_ID != "" && $TARGET_URI != "" ]];then 
+                curl -k -X POST "$TARGET_URI/collector/orchestrator/devops/details" \
+                  -H 'X-TenantID: $TENANT_ID' \
+                  -H 'Content-Type: application/json'\
+                  -d '{
+                        "workflowName": "'"${GITHUB_WORKFLOW}"'",
+                        "workflowId": "'"${GITHUB_RUN_ID}"'",
+                        "workflowNumber": "'"${GITHUB_RUN_ID}"'",
+                        "repo": "'"${GITHUB_REPOSITORY}"'",
+                        "agentId": "'"${AGENT_ID}"'",
+                        "devopsConfigId": "'"${DEVOPS_SETTING_ID}"'",
+                        "agentApiKey": "'"${AGENT_API_KEY}"'",
+                        "buildNumber": "'"${GITHUB_RUN_NUMBER}"'"
+                      }'
+                echo "push to collector stage Completed"
+          fi

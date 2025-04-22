@@ -1,0 +1,120 @@
+name: CI-Demo
+on: [push,workflow_dispatch]
+
+jobs:
+  continuous-integration:
+    runs-on: ${{ vars.RUNNER_NAME_Demo }}
+    environment:
+      name: "Demo"
+    env:
+      CI_IMAGE: "amazoncorretto:8-alpine"
+      SONAR_IMAGE_VERSION: "sonarsource/sonar-scanner-cli:11.0"
+      JFROGCLI_IMAGE_VERSION: "public.ecr.aws/lazsa/gradle-jf:jdk21"
+
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v2
+
+      - name: Initialization
+        run: |
+          JSON_STRING='${{ vars.CI_METADATA }}'
+
+          # push to collector
+          echo "TENANT_ID=$(echo "$JSON_STRING" | jq -r '.general.tenant')" >> "$GITHUB_ENV"
+          echo "TARGET_URI=$(echo "$JSON_STRING" | jq -r '.general.lazsaDomainUri')" >> "$GITHUB_ENV"
+          echo "AGENT_ID=$(echo "$JSON_STRING" | jq -r '.general.agentId')" >> "$GITHUB_ENV"
+          echo "AGENT_API_KEY=$(echo "$JSON_STRING" | jq -r '.general.agentApiKey')" >> "$GITHUB_ENV"
+          echo "DEVOPS_SETTING_ID=$(echo "$JSON_STRING" | jq -r '.general.devopsSettingId')" >> "$GITHUB_ENV"
+
+          echo "REGISTRY_URL=$(echo "$JSON_STRING" | jq -r '.general.containerImagePath')" >> "$GITHUB_ENV"
+          echo "BUILD_TAG=${{ github.run_number }}"  >> "$GITHUB_ENV"
+          echo "ARTIFACTORY_CREDENTIALS=$(echo "$JSON_STRING" | jq -r '.general.artifactorySecret')"  >> "$GITHUB_ENV"
+          echo "SONAR_CREDENTIAL_ID=$(echo "$JSON_STRING" | jq -r '.general.sonarSecret')"  >> "$GITHUB_ENV"
+          echo "ARTIFACTORY=$(echo "$JSON_STRING" | jq -r '.general.artifactory')"  >> "$GITHUB_ENV"
+          echo "STAGE_FLAG=$(echo "$JSON_STRING" | jq -r '.general.stageFlag')"  >> "$GITHUB_ENV"
+          echo "CONTAINER_SCAN_TYPE=$(echo "$JSON_STRING" | jq -r '.general.containerScanType')"  >> "$GITHUB_ENV"
+          echo "DOCKERHOST=$(echo "$JSON_STRING" | jq -r '.general.dockerHostIP')"  >> "$GITHUB_ENV"
+          echo "REPO_NAME=$(echo "$JSON_STRING" | jq -r '.general.repoName')"  >> "$GITHUB_ENV"
+          echo "CONTEXT=$(echo "$JSON_STRING" | jq -r '.general.contextPath')" >> "$GITHUB_ENV"
+          echo "SONAR_ORG=$(echo "$JSON_STRING" | jq -r '.general.sonarOrg')" >> "$GITHUB_ENV"
+          echo "SONAR_HOST=$(echo "$JSON_STRING" | jq -r '.general.sonarHost')" >> "$GITHUB_ENV"
+          echo "SONAR_PROJECT_KEY=$(echo "$JSON_STRING" | jq -r '.general.sonarProjectKey')" >> "$GITHUB_ENV"
+          echo "ARTIFACTORY_USER_SECRET=$(echo "$JSON_STRING" | jq -r '.general.artifactoryUserSecret')" >> "$GITHUB_ENV"
+          echo "ARTIFACTORY_PASSWORD_SECRET=$(echo "$JSON_STRING" | jq -r '.general.artifactoryPasswordSecret')" >> "$GITHUB_ENV"
+          export REGISTRY_URL="$(echo "$JSON_STRING" | jq -r '.general.containerImagePath')"
+          echo "DOCKER_LOGIN_URL=$(echo "$REGISTRY_URL" | cut -d'/' -f1)" >> "$GITHUB_ENV"
+          echo "PUBLISH_ARTIFACT=$(echo "$JSON_STRING" | jq -r '.general.artifactPublish')" >> "$GITHUB_ENV"
+          echo "LIBRARY_REPO=$(echo "$JSON_STRING" | jq -r '.general.artifactRepository.release')" >> "$GITHUB_ENV"
+          echo "ARTIFACTORY_URL=$(echo "$JSON_STRING" | jq -r '.general.artifactoryURL')" >> "$GITHUB_ENV"
+          
+      - name: Build
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE":/opt/repo -w /opt/repo $CI_IMAGE ./gradlew clean build jacocoTestReport --refresh-dependencies
+
+      - name: Unit Test
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE":/opt/repo -w /opt/repo $CI_IMAGE ./gradlew test jacocoTestReport
+
+      - name: SonarQube Scan
+        run: |
+          docker run -v "$GITHUB_WORKSPACE":/app -w /app "$SONAR_IMAGE_VERSION" -Dsonar.sources=src -Dsonar.projectKey=$SONAR_PROJECT_KEY -Dsonar.projectName=$SONAR_PROJECT_KEY -Dsonar.organization=$SONAR_ORG -Dsonar.java.binaries=build/classes -Dsonar.junit.reportPaths=./build/test-results/test -Dsonar.coverage.jacoco.xmlReportPaths=./build/reports/jacoco/test/html -Dsonar.exclusions=build/reports/**.*,build/test-results/**.* -Dsonar.host.url=$SONAR_HOST -Dsonar.login=${{ secrets[env.SONAR_CREDENTIAL_ID] }} -Dsonar.token=${{ secrets[env.SONAR_CREDENTIAL_ID] }}
+
+      - name: Build Container Image
+        run: |
+          docker build -t "$REGISTRY_URL:$BUILD_TAG" -t "$REGISTRY_URL:latest" .
+
+      - name: Setup JFrog CLI
+        if: env.CONTAINER_SCAN_TYPE == 'XRAY'
+        uses: jfrog/setup-jfrog-cli@v4
+        env:
+          JF_URL: "https://${{ env.DOCKER_LOGIN_URL }}"
+          JF_ACCESS_TOKEN: ${{ secrets[env.ARTIFACTORY_PASSWORD_SECRET] }}
+
+      - name: Container Image Scan
+        if: env.CONTAINER_SCAN_TYPE == 'XRAY'
+        run: jf docker scan $REGISTRY_URL:$BUILD_TAG
+      
+      - name: Publish Artifact
+        if: env.PUBLISH_ARTIFACT == 'true'
+        run: |
+          docker run --rm  -v "$GITHUB_WORKSPACE":/opt/"$REPO_NAME" -w /opt/"$REPO_NAME" "$JFROGCLI_IMAGE_VERSION" /bin/bash -c "jf c add jfrog --password "${{ secrets[env.ARTIFACTORY_PASSWORD_SECRET] }}" --user "${{ secrets[env.ARTIFACTORY_USER_SECRET] }}" --url="$ARTIFACTORY_URL" --artifactory-url="$ARTIFACTORY_URL"/artifactory --interactive=false --overwrite=true ; jf gradle-config --repo-deploy "$LIBRARY_REPO" --use-wrapper; jf gradle artifactoryPublish"                           
+
+      - name: Publish Container Image
+        if: env.PUBLISH_ARTIFACT == 'false'
+        run: |
+          
+          if [[ $ARTIFACTORY == "ECR" ]]
+          then
+            ECR_REGION=$(echo "$REGISTRY_URL" | cut -d'.' -f4)
+            set +x 
+            AWS_ACCESS_KEY_ID=${{ secrets[env.ARTIFACTORY_USER_SECRET] }} AWS_SECRET_ACCESS_KEY=${{ secrets[env.ARTIFACTORY_PASSWORD_SECRET] }} aws ecr get-login-password --region "$ECR_REGION" | docker login --username AWS --password-stdin $DOCKER_LOGIN_URL 
+            set -x
+          else
+            docker login -u ${{ secrets[env.ARTIFACTORY_USER_SECRET] }} -p ${{ secrets[env.ARTIFACTORY_PASSWORD_SECRET] }} "$DOCKER_LOGIN_URL"
+          fi
+          
+          docker push "$REGISTRY_URL:$BUILD_TAG"
+          docker push "$REGISTRY_URL:latest"
+ 
+      - name: Push to collector
+        if: always()
+        run: |
+          sudo chown -R `id -u`:`id -g` "$GITHUB_WORKSPACE"
+          echo "Workflow Run ID:${GITHUB_RUN_ID}, Workflow Run Number: ${GITHUB_RUN_NUMBER}, Workflow Name: ${GITHUB_WORKFLOW}, Github Repository: ${GITHUB_REPOSITORY}, Job Name: ${GITHUB_JOB}, Tenant ID: $TENANT_ID, Target URI: $TARGET_URI"
+          if [[ $TENANT_ID != "" && $TARGET_URI != "" ]];then 
+                curl -k -X POST "$TARGET_URI/collector/orchestrator/devops/details" \
+                  -H 'X-TenantID: $TENANT_ID' \
+                  -H 'Content-Type: application/json'\
+                  -d '{
+                        "workflowName": "'"${GITHUB_WORKFLOW}"'",
+                        "workflowId": "'"${GITHUB_RUN_ID}"'",
+                        "workflowNumber": "'"${GITHUB_RUN_ID}"'",
+                        "repo": "'"${GITHUB_REPOSITORY}"'",
+                        "agentId": "'"${AGENT_ID}"'",
+                        "devopsConfigId": "'"${DEVOPS_SETTING_ID}"'",
+                        "agentApiKey": "'"${AGENT_API_KEY}"'",
+                        "buildNumber": "'"${GITHUB_RUN_NUMBER}"'"
+                      }'
+                echo "push to collector stage Completed"
+          fi
